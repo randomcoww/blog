@@ -1,6 +1,6 @@
 ## VRRP Gateway Failover on Single Dynamic Public IP
 
-*Note: I'm not a networking expert. This looks good enough to me to try at home but is not intended for production use.*
+*Note: I'm not a networking expert. This looks good enough to me to try at home but is not tested for production use.*
 
 ---
 
@@ -11,7 +11,7 @@ We can run two Keepalived VRRP nodes to achieve this, but a typical HA gateway c
 Here, I share some hacks I've used to make VRRP gateway failover work pretty well with just one dynamic public IP.
 
 > This example uses a common Linux distro on `systemd-networkd`.
-
+> 
 > Note that this does not discuss load balacing or failing over across multiple ISPs.
 
 ---
@@ -52,7 +52,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   **LAN**
 
-  Add the default route through LAN virtual IP but in a lower priority routing table. `Route` section adds the default route to route table 240 and `RoutingPolicyRule` assigns priority `32780` to the table.
+  Add the default route through LAN virtual IP but in a lower priority routing table. `Route` section adds the default route to route table `240` and `RoutingPolicyRule` assigns priority `32780` to the table.
 
   ```
   ...
@@ -70,7 +70,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   **Interface virtual rule**
 
-  On interface transition to `master`, we use Keepalived `virtual_rules` to set route table 250 (WAN default route) to a higher priority `32770` to prioritize it above the LAN default route.
+  On interface transition to `master`, we use Keepalived `virtual_rules` to set route table `250` (WAN default route) to a higher priority `32770` to prioritize it above the LAN default route.
 
   ```
   ...
@@ -79,7 +79,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
   }
   ```
 
-  Keepalived will automatically remove this on transition to `backup`.
+  Keepalived will automatically call remove on virtual rules on transition to `backup`.
 
   **Routing table summary**
 
@@ -91,11 +91,11 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   ---
 
-  > One thing to note is that I have no configuration to actually take WAN interface of a `backup` node to `DOWN` state.
+  > One thing to note is that I have no configuration to actually take the WAN interface of a `backup` node to `DOWN` state.
   > 
-  > This approach seems safer but would require additional scripting which I haven't had much luck calling from Keepalived. Failover from a downed interface will also take longer because when the interface is brought up, it will need to request a DHCP address.
+  > Taking the interface down ensures no conflict but require adding a Keepalived `notify` script to achieve. I'm not a fan of shell scripts in automation (or in general) and failover from a downed interface will also take longer because when the interface is brought up, it will need to request a DHCP address.
   > 
-  > Currently, both interfaces hold on to the DHCP address, and failover takes no additionl time. I'm able to run latency sensitive streams with little to no impact during failover and I haven't ran into any cons with this approach.
+  > Currently, both interfaces hold on to their DHCP address, and failover takes no additionl time from address assignment. I'm able to run latency sensitive streams with little to no impact during failover and generally haven't ran into any cons with this setup.
 
 ### Tweaks
 
