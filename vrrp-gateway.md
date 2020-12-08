@@ -1,5 +1,3 @@
-# Homelab Hacks
-
 ## VRRP Gateway Failover on Single Dynamic Public IP
 
 *Note: I'm not a networking expert. This looks good enough to me to try at home but is not intended for production use.*
@@ -12,7 +10,9 @@ We can run two Keepalived VRRP nodes to achieve this, but a typical HA gateway c
 
 Here, I share some hacks I've used to make VRRP gateway failover work pretty well with just one dynamic public IP.
 
-> This example is using a common Linux distro on `systemd-networkd`.
+> This example uses a common Linux distro on `systemd-networkd`.
+
+> Note that this does not discuss load balacing or failing over across multiple ISPs.
 
 ---
 
@@ -22,7 +22,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 ### Both gateway WAN interfaces must be configured for DHCP and must receive the same IP address
 
-- We assume only one IP available from ISP. Requesting a second will normally just silenty fail. I've noticed that simply assigning the same MAC address to WAN interfaces of both nodes works for my environment. Both nodes request and can receive and hold the same address at the same time.
+- We assume only one IP is available from the ISP. Requesting a second will normally just silenty fail. I've noticed that simply assigning the same MAC address to WAN interfaces of both nodes works for my environment. Both nodes request and can receive and hold the same address at the same time.
   
 - We just want to ensure only one WAN interface is active at a time to avoid MAC conflict.
 
@@ -34,7 +34,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 - We could block WAN access while a node a `backup`, but I prefer all nodes to have internet access at all times. We will have the `backup` node fallback to a default route over LAN through the `master` node much like the rest of the LAN network.
 
-- Actual implemetation would have the fallback route over LAN prepopulated on both nodes. The higher priority default route over the WAN interface will only be created when the node is promoted to `master`.
+- Actual implemetation would have the fallback route over LAN pre-populated on both nodes. The higher priority default route over the WAN interface will only be created when the node is promoted to `master`.
 
   ![](vrrp-2.png)
 
@@ -52,7 +52,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   **LAN**
 
-  Add the default route through LAN virtual IP but in a lower priority route table. Keepalived inserts the default route over WAN above this rule to prioritize traffic over the WAN interface.
+  Add the default route through LAN virtual IP but in a lower priority routing table. `Route` section adds the default route to route table 240 and `RoutingPolicyRule` assigns priority `32780` to the table.
 
   ```
   ...
@@ -70,7 +70,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   **Interface virtual rule**
 
-  On interface transition to `master`, route table 250 (WAN default route) is given priority 32770 to prioritize it above the LAN default route. This is automatically removed on transition to `backup`.
+  On interface transition to `master`, we use Keepalived `virtual_rules` to set route table 250 (WAN default route) to a higher priority `32770` to prioritize it above the LAN default route.
 
   ```
   ...
@@ -78,6 +78,8 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
     to all lookup 250 priority 32770
   }
   ```
+
+  Keepalived will automatically remove this on transition to `backup`.
 
   **Routing table summary**
 
@@ -99,7 +101,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 - Enable `use_vmac` on Keepalived. This will create a macvlan interface on each node with the same MAC address, and the virtual IP will be assigned to this interface. This makes the MAC address of the virtual IP consistent on all nodes, and wil reduce the impact of failover. Having this set allows my work VPN to stay connected on failover.
 
-- Reduce `advert_int` to reduce time to failover. This requires a low latency connection between nodes. This defaults to 1s, which caused connections to my self hosted remote audio stream to drop on failover. Reducing this to 0.1 fixed the issue.
+- Reduce Keepalived `advert_int` to reduce time to failover. This requires a low latency connection between nodes. This defaults to 1s, which caused connections to my self hosted remote audio stream to drop on failover. Reducing this to 0.1 fixed the issue.
 
 - Setup conntrackd. This replicates connection states between nodes so that they are not lost on failover. I will be honest - I haven't found any tests that show this improve any use case and I'm not actually 100% sure that I have it working correctly. It appears in a number of VRRP examples, so I assume it is helpful. This requires a dedicated network for connection syncing depending on configuration.
 
@@ -135,7 +137,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   [Address]
   Address=192.168.1.1/24
-  # Node 2
+  # For node 2, use
   # Address=192.168.1.2/24
 
   [Route]
@@ -160,7 +162,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   [Address]
   Address=192.168.190.1/29
-  # Node 2
+  # For node 2, use
   # Address=192.168.190.2/29
   ```
 
@@ -176,7 +178,6 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
     nftables keepalived
     dynamic_interfaces allow_if_changes
     max_auto_priority -1
-    lvs_sync_daemon ens6 VI_gateway
   }
   vrrp_instance VI_gateway {
     no_accept
@@ -209,7 +210,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
       IPv4_address 225.0.0.50
       Group 3780
       IPv4_interface 192.168.190.1
-      # Node 2
+      # For node 2, use
       # IPv4_interface 192.168.190.2
       Interface ens5
       Checksum on
@@ -238,8 +239,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
         IPv4_address 127.0.0.1
         IPv4_address 192.168.190.0/29
         IPv4_address 192.168.1.1
-        # Node 2
-        # IPv4_address 192.168.1.2
+        IPv4_address 192.168.1.2
         IPv4_address 192.168.1.3
       }
     }
