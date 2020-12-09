@@ -1,26 +1,39 @@
+[Homelab Hacks](README.md)
+
 ## VRRP Gateway Failover on Single Dynamic Public IP
 
-*Note: I'm not a networking expert. This looks good enough to me to try at home but is not tested for production use.*
+> I'm not a networking expert. This works well enough for me to keep using at home, but that is about all I will claim.
+>
+> This does not discuss load balacing or failing over across multiple ISPs.
 
 ---
 
-A homelab may not need uptime, but redunant gateways are still convenient for keeping internet access alive while doing maintenance on any node.
+A homelab may not need uptime, but redundant gateways are still convenient for keeping internet access alive while doing maintenance on a node.
 
 We can run two Keepalived VRRP nodes to achieve this, but a typical HA gateway configuration requires three static public IPs - one for each node WAN interface and one floating virtual IP for forwarding. This requirement is a bit steep for most home environments where we typically have one DHCP allocated IP from our ISP.
 
 Here, I share some hacks I've used to make VRRP gateway failover work pretty well with just one dynamic public IP.
 
-> This example uses a common Linux distro on `systemd-networkd`.
-> 
-> Note that this does not discuss load balacing or failing over across multiple ISPs.
+**Failover cases tested**
+
+- No interruption seen on common streaming services like Youtube.
+- Cloud gaming on [Shadow](https://shadow.tech/) sees a brief sub one second stutter but does not disconnect.
+- Cisco AnyConnect VPN to work is unaffected.
+- No interruption seen on self hosted HTTP audio stream accessed from remote.
+
+**What doesn't work?**
+
+- Nothing I'm aware of :)
 
 ---
+
+> This example uses a common Linux distro with `systemd-networkd`.
 
 ### Configure LAN for typical VRRP
 
 - Each node will have a LAN IP, and there will be a third virtual IP that floats between the nodes. Configure this as a Keepalived `virtual_ip` on the LAN interface.
 
-  **systemd-networkd**
+- **systemd-networkd**
 
   **LAN**
 
@@ -37,7 +50,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
   # Address=192.168.1.2/24
   ```
 
-  **Keepalived**
+- **Keepalived**
 
   **Interface virtual IP**
 
@@ -53,23 +66,23 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 ### Configure both gateway WAN interfaces to receive the same DHCP IP
 
-- We assume only one IP is available from the ISP. Requesting a second will normally just silenty fail. I've noticed that simply assigning the same MAC address to WAN interfaces of both nodes works for my environment. Both nodes request and can receive and hold the same address at the same time.
-  
-- **Assign the same MAC address to the WAN interfaces of both gateway nodes.** Now we just want to ensure only one WAN interface is active at a time to avoid MAC conflict.
+- We want both gateway nodes to identify as the same DHCP client to the ISP. **Assign the same MAC address to the WAN interfaces of both gateway nodes** to do this. Some DHCP servers identify client by machine ID, so it may be necessary to also duplicate this on nodes.
 
-### Configure only one node to have an active WAN interface at a given time
+  This works for my environment and both nodes can receive and hold the same IP at the same time. I assume this is general behavior of DHCP address allocation that isn't specific to ISPs.
 
-- We can run Keepliaved on both nodes to assign a `master` and `backup` role and configure rules to apply under each role.
+  Now we want to make sure only one WAN interface is active at a given time to avoid MAC conflict.
 
-- The gateway node will only forward traffic from LAN to WAN while in `master` mode. To avoid conflict, we don't want any traffic entering or leaving the WAN interface of the `backup` node.
+### Configure only one node to have an active WAN interface
 
-- We could block WAN access while a node a `backup`, but I prefer all nodes have internet access at all times. We will have the `backup` node fallback to a default route via the LAN virtual IP through the `master` node much like the rest of the LAN network.
+- We can run Keepliaved on both nodes to assign a `master` and `backup` role and configure rules to apply under each role. The gateway node will only forward traffic from LAN to WAN while in `master` mode. To avoid conflict, we don't want any traffic entering or leaving the WAN interface of the `backup` node.
 
-- Actual implemetation would have the fallback route over LAN pre-populated on both nodes. We will configure Keepalived to create a higher priority default route over the WAN interface when the node is promoted to `master`.
+  We could block WAN access while a node is a `backup`, but I prefer all nodes have internet access at all times. We will have the `backup` node fallback to a default route via the LAN virtual IP through the `master` node much like the rest of the LAN network.
+
+  Actual implemetation would have the fallback route over LAN pre-populated on both nodes. We will configure Keepalived to create a higher priority default route over the WAN interface when the node is promoted to `master`.
 
   ![](vrrp-gateway-diagram.png)
 
-  **systemd-networkd**
+- **systemd-networkd**
 
   **WAN**
 
@@ -112,7 +125,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
   Priority=32780
   ```
 
-  **Keepalived**
+- **Keepalived**
 
   **Interface virtual rule**
 
@@ -131,23 +144,23 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
   }
   ```
 
-  Keepalived will automatically call remove on virtual rules on transition to `backup` to have the node fallback to routing default traffic over LAN.
+  Keepalived will automatically remove rules added by `virtual_rules` on transition to `backup`.
 
-  **Routing table summary**
+- **Routing table summary**
 
   | ID   | Priority | Routes                           | Notes                                    |
   |------|----------|----------------------------------|------------------------------------------|
-  | main | 32760    | `192.168.1.0/24 via 192.168.1.3` | Added automatically by systemd           |
+  | main | 32760    | `192.168.1.0/24 via 192.168.1.1` | Added automatically by systemd           |
   | 250  | 32770    | `0.0.0.0/0 via 123.1.2.10`       | Added by keepalived on master transition |
   | 240  | 32780    | `0.0.0.0/0 via 192.168.1.3`      | Pre-populated default route              |
 
   ---
 
   > One thing to note is that I have no configuration to actually take the WAN interface of a `backup` node to `DOWN` state.
-  > 
-  > Taking the interface down ensures no conflict but require adding a Keepalived `notify` script to achieve. I'm not a fan of shell scripts in automation (or in general) and failover from a downed interface will also take longer because when the interface is brought up, it will need to request a DHCP address.
-  > 
-  > Currently, both interfaces hold on to their DHCP address, and failover takes no additionl time from address assignment. I'm able to run latency sensitive streams with little to no impact during failover and generally haven't ran into any cons with this setup.
+  >
+  > Taking the interface down ensures no MAC conflict but requires adding a Keepalived `notify` script to implement. I'm not a fan of shell scripts in automation (or in general). Failover from a downed interface will also take longer because when the interface is brought up, it will need to request a DHCP address.
+  >
+  > Currently, both interfaces hold on to their DHCP addresses, and failover takes no additionl time from address assignment. I'm able to run latency sensitive streams with little to no impact during failover and generally haven't ran into any cons with this approach.
 
 ### Tweaks
 
@@ -155,7 +168,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 - Reduce Keepalived `advert_int` to reduce time to failover. This requires a low latency connection between nodes. This defaults to 1s, which caused connections to my self hosted remote audio stream to drop on failover. Reducing this to 0.1 fixed the issue.
 
-- Setup conntrackd. This replicates connection states between nodes so that they are not lost on failover. I will be honest - I haven't found any tests that show this improve any use case and I'm not actually 100% sure that I have it working correctly. It appears in a number of VRRP examples, so I assume it is helpful. This requires a dedicated network for connection syncing depending on configuration.
+- Set up conntrackd. This replicates connection states between nodes so that they are not lost on failover. I will be honest - I haven't found any tests that show this improve any use case and I'm not actually 100% sure that I have it working correctly. It appears in a number of VRRP examples, so I assume it is helpful. This requires a dedicated network for connection syncing depending on configuration.
 
 ### Confguration examples
 
