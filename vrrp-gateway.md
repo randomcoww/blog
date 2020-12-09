@@ -4,7 +4,7 @@
 
 ---
 
-A homelab may not need uptime, but redunant gateways are still convenient for keeping internet access alive while doing maintenance on a node.
+A homelab may not need uptime, but redunant gateways are still convenient for keeping internet access alive while doing maintenance on any node.
 
 We can run two Keepalived VRRP nodes to achieve this, but a typical HA gateway configuration requires three static public IPs - one for each node WAN interface and one floating virtual IP for forwarding. This requirement is a bit steep for most home environments where we typically have one DHCP allocated IP from our ISP.
 
@@ -16,15 +16,46 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 ---
 
-### LAN side is the same as a typical VRRP configuration
+### Configure LAN for typical VRRP
 
-- Each node will have a LAN IP, and there will be a third virtual IP that floats between the nodes.
+- Each node will have a LAN IP, and there will be a third virtual IP that floats between the nodes. Configure this as a Keepalived `virtual_ip` on the LAN interface.
 
-### Both gateway WAN interfaces must be configured for DHCP and must receive the same IP address
+  **systemd-networkd**
+
+  **LAN**
+
+  ```bash
+  [Match]
+  Name=ens6
+
+  [Network]
+  DHCP=false
+
+  [Address]
+  Address=192.168.1.1/24
+  # For node 2, use
+  # Address=192.168.1.2/24
+  ```
+
+  **Keepalived**
+
+  **Interface virtual IP**
+
+  ```bash
+  vrrp_instance VI_gateway {
+    ...
+    interface ens6
+    virtual_ipaddress {
+      192.168.1.3
+    }
+  }
+  ```
+
+### Configure both gateway WAN interfaces to receive the same DHCP IP
 
 - We assume only one IP is available from the ISP. Requesting a second will normally just silenty fail. I've noticed that simply assigning the same MAC address to WAN interfaces of both nodes works for my environment. Both nodes request and can receive and hold the same address at the same time.
   
-- We just want to ensure only one WAN interface is active at a time to avoid MAC conflict.
+- **Assign the same MAC address to the WAN interfaces of both gateway nodes.** Now we just want to ensure only one WAN interface is active at a time to avoid MAC conflict.
 
 ### Configure only one node to have an active WAN interface at a given time
 
@@ -32,30 +63,45 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 - The gateway node will only forward traffic from LAN to WAN while in `master` mode. To avoid conflict, we don't want any traffic entering or leaving the WAN interface of the `backup` node.
 
-- We could block WAN access while a node a `backup`, but I prefer all nodes to have internet access at all times. We will have the `backup` node fallback to a default route over LAN through the `master` node much like the rest of the LAN network.
+- We could block WAN access while a node a `backup`, but I prefer all nodes have internet access at all times. We will have the `backup` node fallback to a default route via the LAN virtual IP through the `master` node much like the rest of the LAN network.
 
-- Actual implemetation would have the fallback route over LAN pre-populated on both nodes. The higher priority default route over the WAN interface will only be created when the node is promoted to `master`.
+- Actual implemetation would have the fallback route over LAN pre-populated on both nodes. We will configure Keepalived to create a higher priority default route over the WAN interface when the node is promoted to `master`.
 
-  ![](vrrp-2.png)
+  ![](vrrp-gateway-diagram.png)
 
-  **systemd-network configuration**
+  **systemd-networkd**
 
   **WAN**
 
-  Set default WAN routes in another route table. This table is unused until Keepalived promotes the node to `master`. Interfaces will still acquire an address over DHCP, but will otherwise be unused.
+  Set default WAN routes in a new route table `250`. This table is unused until Keepalived promotes the node to `master`. Interfaces will still acquire an address over DHCP, but will otherwise be unused.
 
-  ```
-  ...
+  ```bash
+  [Match]
+  Name=ens7
+
+  [Network]
+  DHCP=true
+
   [DHCP]
   RouteTable=250
   ```
 
   **LAN**
 
-  Add the default route through LAN virtual IP but in a lower priority routing table. `Route` section adds the default route to route table `240` and `RoutingPolicyRule` assigns priority `32780` to the table.
+  Add the default route through LAN virtual IP but in a lower priority routing table. `Route` section adds the default route to a new route table `240` and `RoutingPolicyRule` assigns priority `32780` to the table.
 
-  ```
-  ...
+  ```bash
+  [Match]
+  Name=ens6
+
+  [Network]
+  DHCP=false
+
+  [Address]
+  Address=192.168.1.1/24
+  # For node 2, use
+  # Address=192.168.1.2/24
+
   [Route]
   Gateway=192.168.1.3
   Destination=0.0.0.0/0
@@ -72,14 +118,20 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   On interface transition to `master`, we use Keepalived `virtual_rules` to set route table `250` (WAN default route) to a higher priority `32770` to prioritize it above the LAN default route.
 
-  ```
-  ...
-  virtual_rules {
-    to all lookup 250 priority 32770
+  ```bash
+  vrrp_instance VI_gateway {
+    ...
+    interface ens6
+    virtual_ipaddress {
+      192.168.1.3
+    }
+    virtual_rules {
+      to all lookup 250 priority 32770
+    }
   }
   ```
 
-  Keepalived will automatically call remove on virtual rules on transition to `backup`.
+  Keepalived will automatically call remove on virtual rules on transition to `backup` to have the node fallback to routing default traffic over LAN.
 
   **Routing table summary**
 
@@ -99,7 +151,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 ### Tweaks
 
-- Enable `use_vmac` on Keepalived. This will create a macvlan interface on each node with the same MAC address, and the virtual IP will be assigned to this interface. This makes the MAC address of the virtual IP consistent on all nodes, and wil reduce the impact of failover. Having this set allows my work VPN to stay connected on failover.
+- Enable `use_vmac` on Keepalived. This will create a macvlan interface on each node with the same MAC address, and the virtual IP will be assigned to this interface. This makes the MAC address of the virtual IP consistent on all nodes, and will reduce the impact of failover. Having this set allows my work VPN to stay connected on failover.
 
 - Reduce Keepalived `advert_int` to reduce time to failover. This requires a low latency connection between nodes. This defaults to 1s, which caused connections to my self hosted remote audio stream to drop on failover. Reducing this to 0.1 fixed the issue.
 
