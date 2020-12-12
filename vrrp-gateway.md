@@ -59,7 +59,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
     ...
     interface ens6
     virtual_ipaddress {
-      192.168.1.3
+      192.168.1.3 dev ens6
     }
   }
   ```
@@ -136,7 +136,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
     ...
     interface ens6
     virtual_ipaddress {
-      192.168.1.3
+      192.168.1.3 dev ens6
     }
     virtual_rules {
       to all lookup 250 priority 32770
@@ -154,21 +154,57 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
   | 250  | 32770    | `0.0.0.0/0 via 123.1.2.10`       | Added by keepalived on master transition |
   | 240  | 32780    | `0.0.0.0/0 via 192.168.1.3`      | Pre-populated default route              |
 
-  ---
-
-  > One thing to note is that I have no configuration to actually take the WAN interface of a `backup` node to `DOWN` state.
-  >
-  > Taking the interface down ensures no MAC conflict but requires adding a Keepalived `notify` script to implement. I'm not a fan of shell scripts in automation (or in general). Failover from a downed interface will also take longer because when the interface is brought up, it will need to request a DHCP address.
-  >
-  > Currently, both interfaces hold on to their DHCP addresses, and failover takes no additionl time from address assignment. I'm able to run latency sensitive streams with little to no impact during failover and generally haven't ran into any cons with this approach.
-
 ### Tweaks
+
+- Add a WAN entry for virtual IP. When Keepalived transitions to `master`, it will send a number of gratuitous ARPs (GARP) for virtual IPs on specified interfaces to quickly switch client devices over to the new node. Because we are working outside of Keepalived to configure the WAN interface, no GARP will be sent for it. Based on testing, a suitable workaround for this is to add `0.0.0.0` as the Keepalived `virtual_ip` for the WAN device.
+
+  ```
+  vrrp_instance VI_gateway {
+    ...
+    interface ens6
+    virtual_ipaddress {
+      192.168.1.3 dev ens6
+      0.0.0.0 dev ens7
+    }
+    virtual_rules {
+      to all lookup 250 priority 32770
+    }
+  }
+  ```
+
+  This would not add any additional IPs or routes, but will simply trigger a GARP on the WAN interface for 0.0.0.0. Based on testing and observing the switch forwarding table, this seems to aid in quickly transitioning the switch port over to the new `master`.
+
+  Finally, we add `garp_extra_if all` and `garp_master_refresh` to ensure GARP is sent on all interfaces on the `vrrp_instance`, and is repeated periodically to keep this table refreshed.
+
+  ```
+  vrrp_instance VI_gateway {
+    ...
+    interface ens6
+    garp_master_refresh 60
+    garp_extra_if all 60
+    virtual_ipaddress {
+      192.168.1.3 dev ens6
+      0.0.0.0 dev ens7
+    }
+    virtual_rules {
+      to all lookup 250 priority 32770
+    }
+  }
+  ```
 
 - Enable `use_vmac` on Keepalived. This will create a macvlan interface on each node with the same MAC address, and the virtual IP will be assigned to this interface. This makes the MAC address of the virtual IP consistent on all nodes, and will reduce the impact of failover. Having this set allows my work VPN to stay connected on failover.
 
 - Reduce Keepalived `advert_int` to reduce time to failover. This requires a low latency connection between nodes. This defaults to 1s, which caused connections to my self hosted remote audio stream to drop on failover. Reducing this to 0.1 fixed the issue.
 
 - Set up conntrackd. This replicates connection states between nodes so that they are not lost on failover. I will be honest - I haven't found any tests that show this improve any use case and I'm not actually 100% sure that I have it working correctly. It appears in a number of VRRP examples, so I assume it is helpful. This requires a dedicated network for connection syncing depending on configuration.
+
+---
+
+  > One thing to note is that I have no configuration to actually take the WAN interface of a `backup` node to `DOWN` state.
+  >
+  > Taking the interface down ensures no MAC conflict but requires adding a Keepalived `notify` script to implement. I'm not a fan of shell scripts in automation (or in general). Failover from a downed interface will also take longer because when the interface is brought up, it will need to request a DHCP address. Disabling ARP on the WAN interface may be a sufficient alternative, but will again require adding a `notify` script.
+  >
+  > Currently, both interfaces hold on to their DHCP addresses, and failover takes no additionl time from address assignment. I'm able to run latency sensitive streams with little to no impact during failover and generally haven't ran into any cons with this approach.
 
 ### Confguration examples
 
@@ -215,7 +251,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
   Priority=32780
   ```
 
-- Keepalived sync interface
+- Conntrackd sync interface
 
   ```bash
   [Match]
@@ -239,7 +275,6 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
     vrrp_iptables
     use_vmac
     vmac_xmit_base
-    vrrp_garp_master_refresh 60
     nftables keepalived
     dynamic_interfaces allow_if_changes
     max_auto_priority -1
@@ -251,12 +286,15 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
     advert_int 0.1
     virtual_router_id 60
     interface ens6
+    garp_master_refresh 60
+    garp_extra_if all 60
     priority 250
     virtual_rules {
       to all lookup 250 priority 32770
     }
     virtual_ipaddress {
-      192.168.1.3
+      192.168.1.3 dev ens6
+      0.0.0.0 dev ens7
     }
   }
   ```
