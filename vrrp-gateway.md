@@ -29,6 +29,12 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 > This example uses a common Linux distro with `systemd-networkd`.
 
+### Layout
+
+- This is roughly the layout I have. The modem goes to a switch (WAN VLAN) and connect to WAN interfaces of both gateway nodes. Yes, the modem and switch are still single points of failure, but I don't do much tinkering on these devices, so I rarely need to take them down.
+
+  ![](vrrp-gateway-layout.png)
+
 ### Configure LAN for typical VRRP
 
 - Each node will have a LAN IP, and there will be a third virtual IP that floats between the nodes. Configure this as a Keepalived `virtual_ip` on the LAN interface.
@@ -80,7 +86,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   Actual implemetation would have the fallback route over LAN pre-populated on both nodes. We will configure Keepalived to create a higher priority default route over the WAN interface when the node is promoted to `master`.
 
-  ![](vrrp-gateway-diagram.png)
+  ![](vrrp-gateway-routes.png)
 
 - **systemd-networkd**
 
