@@ -198,6 +198,26 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
   }
   ```
 
+- Reduce `garp_master_refresh` time. An interesting observation is that rebooting the `backup` gateway node occasionally briefly breaks internet access.
+
+  `arp_notify` is disabled by default, so my speculation is that whenever the `backup` node makes a DHCP request on the WAN interface, as we have allowed, the switch MAC cache for the WAN interface updates to point to the `backup` node. Spamming GARP via `garp_master_refresh` should, in theory, help recover quickly when this happens.
+
+  ```
+  vrrp_instance VI_gateway {
+    ...
+    interface ens6
+    garp_master_refresh 1
+    garp_extra_if all 1
+    virtual_ipaddress {
+      192.168.1.3 dev ens6
+      0.0.0.0 dev ens7
+    }
+    virtual_rules {
+      to all lookup 250 priority 32770
+    }
+  }
+  ```
+
 - Enable `use_vmac` on Keepalived. This will create a macvlan interface on each node with the same MAC address, and the virtual IP will be assigned to this interface. This makes the MAC address of the virtual IP consistent on all nodes, and will reduce the impact of failover. Having this set allows my work VPN to stay connected on failover.
 
 - Reduce Keepalived `advert_int` to reduce time to failover. This requires a low latency connection between nodes. This defaults to 1s, which caused connections to my self hosted remote audio stream to drop on failover. Reducing this to 0.1 fixed the issue.
@@ -208,7 +228,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   > One thing to note is that I have no configuration to actually take the WAN interface of a `backup` node to `DOWN` state.
   >
-  > Taking the interface down ensures no MAC conflict but requires adding a Keepalived `notify` script to implement. I'm not a fan of shell scripts in automation (or in general). Failover from a downed interface will also take longer because when the interface is brought up, it will need to request a DHCP address. Disabling ARP on the WAN interface may be a sufficient alternative, but will again require adding a `notify` script.
+  > Taking the interface down ensures no MAC conflict but requires adding a Keepalived `notify` script to implement. I'm not a fan of shell scripts in automation (or in general). Failover from a downed interface will also take longer because when the interface is brought up, it will need to request a DHCP address.
   >
   > Currently, both interfaces hold on to their DHCP addresses, and failover takes no additionl time from address assignment. I'm able to run latency sensitive streams with little to no impact during failover and generally haven't ran into any cons with this approach.
 
@@ -292,8 +312,8 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
     advert_int 0.1
     virtual_router_id 60
     interface ens6
-    garp_master_refresh 60
-    garp_extra_if all 60
+    garp_master_refresh 1
+    garp_extra_if all 1
     priority 250
     virtual_rules {
       to all lookup 250 priority 32770
