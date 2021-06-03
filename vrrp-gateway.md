@@ -72,9 +72,12 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 ### Configure both gateway WAN interfaces to receive the same DHCP IP
 
-- We want both gateway nodes to identify as the same DHCP client to the ISP. **Assign the same MAC address to the WAN interfaces of both gateway nodes** to do this. Some DHCP servers identify client by machine ID, so it may be necessary to also duplicate this on nodes.
+- We want both gateway nodes to identify as the same DHCP client to the ISP. There are a few tricks I've found that work for a number of ISPs I've been on.
 
-  This works for my environment and both nodes can receive and hold the same IP at the same time. I assume this is general behavior of DHCP address allocation that isn't specific to ISPs.
+  1. Assign the same MAC address to the WAN interfaces of both gateway nodes
+  2. [Ensure MAC address is sent as a client identifier](https://www.freedesktop.org/software/systemd/man/systemd.network.html#ClientIdentifier=)
+  3. [Anonymize the client](https://www.freedesktop.org/software/systemd/man/systemd.network.html#Anonymize=)
+  4. [Request server to use broadcast messages](https://www.freedesktop.org/software/systemd/man/systemd.network.html#RequestBroadcast=)
 
   Now we want to make sure only one WAN interface is active at a given time to avoid MAC conflict.
 
@@ -103,6 +106,8 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   [DHCP]
   RouteTable=250
+  Anonymize=true
+  RequestBroadcast=true
   ```
 
   **LAN**
@@ -250,6 +255,8 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
   [DHCP]
   UseMTU=true
   RouteTable=250
+  Anonymize=true
+  RequestBroadcast=true
   ```
 
 - LAN interface
