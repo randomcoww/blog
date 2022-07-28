@@ -203,7 +203,7 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   `arp_notify` is disabled by default, so my speculation is that whenever the `backup` node makes a DHCP request on the WAN interface, as we have allowed, the switch MAC cache for the WAN interface updates to point to the `backup` node. Spamming GARP via `garp_master_refresh` should, in theory, help recover quickly when this happens.
 
-  > A sensible fix for this may be to just turn off ARP on the inactive WAN interface, but this has the disadvantage of not allowing the WAN IP to get refreshed via DHCP. Currently both WAN interfaces hold on to their DHCP addresses and failover takes no additionl time from address assignment.
+  > A sensible fix for this may be to just turn off ARP on the inactive WAN interface, but this has the disadvantage of not allowing the WAN IP to get refreshed via DHCP. Currently both WAN interfaces hold on to their DHCP addresses and failover takes no additional time from address assignment.
 
   ```
   vrrp_instance VI_gateway {
