@@ -6,8 +6,6 @@
 >
 > This does not discuss load balacing or failing over across multiple ISPs.
 
----
-
 A homelab may not need uptime, but redundant gateways are still convenient for keeping internet access alive while doing maintenance on a node.
 
 We can run two Keepalived VRRP nodes to achieve this, but a typical HA gateway configuration requires three static public IPs - one for each node WAN interface and one floating virtual IP for forwarding. This requirement is a bit steep for most home environments where we typically have one DHCP allocated IP from our ISP.
@@ -24,8 +22,6 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 **What doesn't work?**
 
 - Nothing I'm aware of :)
-
----
 
 > This example uses a common Linux distro with `systemd-networkd`.
 
@@ -207,6 +203,8 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
   `arp_notify` is disabled by default, so my speculation is that whenever the `backup` node makes a DHCP request on the WAN interface, as we have allowed, the switch MAC cache for the WAN interface updates to point to the `backup` node. Spamming GARP via `garp_master_refresh` should, in theory, help recover quickly when this happens.
 
+  > A sensible fix for this may be to just turn off ARP on the inactive WAN interface, but this has the disadvantage of not allowing the WAN IP to get refreshed via DHCP. Currently both WAN interfaces hold on to their DHCP addresses and failover takes no additionl time from address assignment.
+
   ```
   vrrp_instance VI_gateway {
     ...
@@ -227,15 +225,9 @@ Here, I share some hacks I've used to make VRRP gateway failover work pretty wel
 
 - Reduce Keepalived `advert_int` to reduce time to failover. This requires a low latency connection between nodes. This defaults to 1s, which caused connections to my self hosted remote audio stream to drop on failover. Reducing this to 0.1 fixed the issue.
 
-- Set up conntrackd. This replicates connection states between nodes so that they are not lost on failover. I will be honest - I haven't found any tests that show this improve any use case and I'm not actually 100% sure that I have it working correctly. It appears in a number of VRRP examples, so I assume it is helpful. This requires a dedicated network for connection syncing depending on configuration.
+- Set up conntrackd. This replicates connection states between nodes so that they are not lost on failover. I will be honest - I haven't found any tests that show this improve any use case and I'm not actually sure that I have it working correctly. It appears in a number of VRRP examples, so I assume it is helpful. This requires a dedicated network for connection syncing depending on configuration.
 
 ---
-
-  > One thing to note is that I have no configuration to actually take the WAN interface of a `backup` node to `DOWN` state.
-  >
-  > Taking the interface down ensures no MAC conflict but requires adding a Keepalived `notify` script to implement. I'm not a fan of shell scripts in automation (or in general). Failover from a downed interface will also take longer because when the interface is brought up, it will need to request a DHCP address.
-  >
-  > Currently, both interfaces hold on to their DHCP addresses, and failover takes no additionl time from address assignment. I'm able to run latency sensitive streams with little to no impact during failover and generally haven't ran into any cons with this approach.
 
 ### Confguration examples
 
