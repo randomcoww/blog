@@ -2,10 +2,6 @@
 
 ## VRRP Gateway Failover on Single Dynamic Public IP
 
-> I'm not a networking expert. This works well enough for me to keep using at home, but that is about all I will claim.
->
-> This does not discuss load balacing or failing over across multiple ISPs.
-
 A homelab may not need uptime, but redundant gateways are still convenient for keeping internet access alive while doing maintenance on a node.
 
 We can run two Keepalived VRRP nodes to achieve this, but a typical HA gateway configuration requires three static public IPs - one for each node WAN interface and one floating virtual IP for forwarding. This requirement is a bit steep for most home environments where we typically have one DHCP allocated IP from our ISP.
